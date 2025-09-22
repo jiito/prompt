@@ -18,6 +18,16 @@
       "mode": "view"
     }
   ],
+  "preferences": [
+    {
+      "name": "promptDirectory",
+      "title": "Prompt Directory",
+      "description": "Directory containing your prompt template files (.txt and .md)",
+      "type": "textfield",
+      "default": "~/git/prompts",
+      "required": false
+    }
+  ],
   "dependencies": {
     "@raycast/api": "^1.103.1",
     "@raycast/utils": "^1.17.0"

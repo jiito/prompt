@@ -1,92 +1,117 @@
-import { ActionPanel, Action, Form, environment, showToast, Toast } from "@raycast/api";
-import { useState } from "react";
-import { readFileSync } from "fs";
+import { ActionPanel, Action, Form, showToast, Toast, getPreferenceValues, Clipboard } from "@raycast/api";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { readFileSync, readdirSync, existsSync, statSync } from "fs";
 import path from "path";
+import os from "os";
 
-type TemplateKey = "learning" | "paper";
+interface Preferences {
+  promptDirectory: string;
+}
 
-const PAPER_SUMMARY_TEMPLATE = `
-Role
-You are an expert research assistant who writes clear, faithful, and concise summaries of academic papers and long articles.
+interface PromptTemplate {
+  key: string;
+  title: string;
+  content: string;
+  filepath: string;
+}
 
-Input
-- One or more links, PDFs, or pasted text excerpts.
+function expandPath(inputPath: string): string {
+  if (inputPath.startsWith("~/")) {
+    return path.join(os.homedir(), inputPath.slice(2));
+  }
+  return inputPath;
+}
 
-Your Tasks
-1) Identify the main question or problem addressed.
-2) Summarize the core contributions and key findings.
-3) Explain methods/approach at a high level.
-4) Note assumptions, limitations, and potential biases.
-5) Provide practical takeaways or implications.
-6) List 3-5 key quotes or passages (if available in input).
-7) Suggest 2-3 follow-up questions or next steps.
+function loadPromptTemplates(): PromptTemplate[] {
+  const preferences = getPreferenceValues<Preferences>();
+  const promptDir = expandPath(preferences.promptDirectory || "~/git/prompts");
 
-Output Format
-- TL;DR (1-3 sentences)
-- Key Contributions (bulleted)
-- Methods (short paragraph)
-- Limitations (bulleted)
-- Practical Implications (bulleted)
-- Notable Quotes (bulleted)
-- Follow-ups (bulleted)
+  if (!existsSync(promptDir)) {
+    showToast({
+      style: Toast.Style.Failure,
+      title: "Prompt directory not found",
+      message: `Directory ${promptDir} does not exist`,
+    });
+    return [];
+  }
 
-Constraints
-- Be accurate and non-speculative; do not invent content not present in sources.
-- Prefer brevity and clarity; avoid jargon unless essential.
-- If multiple sources conflict, call it out.
-`;
-
-let cachedLearningTemplate: string | null = null;
-
-function loadLearningTemplate(): string {
   try {
-    const filePath = path.join(environment.assetsPath, "learning_mode.txt");
-    if (cachedLearningTemplate !== null) {
-      return cachedLearningTemplate;
-    }
-    const content = readFileSync(filePath, "utf8");
-    cachedLearningTemplate = content;
-    return content;
+    const files = readdirSync(promptDir);
+    const promptFiles = files.filter(
+      (file) => (file.endsWith(".txt") || file.endsWith(".md")) && statSync(path.join(promptDir, file)).isFile(),
+    );
+
+    return promptFiles.map((file) => {
+      const filepath = path.join(promptDir, file);
+      const content = readFileSync(filepath, "utf8");
+      const key = path.basename(file, path.extname(file));
+      const title = key.replace(/[_-]/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+
+      return {
+        key,
+        title,
+        content,
+        filepath,
+      };
+    });
   } catch (error) {
     showToast({
       style: Toast.Style.Failure,
-      title: "Failed to load learning template",
+      title: "Failed to load prompts",
       message: error instanceof Error ? error.message : String(error),
     });
-    cachedLearningTemplate = "";
-    return cachedLearningTemplate;
+    return [];
   }
 }
 
 export default function Command() {
-  const [selectedTemplate, setSelectedTemplate] = useState<TemplateKey>("learning");
-  const [templateBody, setTemplateBody] = useState<string>(() => loadLearningTemplate());
+  const [templates, setTemplates] = useState<PromptTemplate[]>([]);
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState<string>("");
+  const templateBody = useRef<string>("");
+
+  useEffect(() => {
+    console.log("loading templates");
+    const loadedTemplates = loadPromptTemplates();
+    setTemplates(loadedTemplates);
+
+    if (loadedTemplates.length > 0) {
+      const firstTemplate = loadedTemplates[0];
+      setSelectedTemplateKey(firstTemplate.key);
+      templateBody.current = firstTemplate.content;
+    }
+  }, []);
+
+  const onTemplateChange = useCallback(
+    (value: string) => {
+      console.log("onTemplateChange", value);
+      const selectedTemplate = templates.find((t) => t.key === value);
+      if (selectedTemplate) {
+        setSelectedTemplateKey(value);
+        templateBody.current = selectedTemplate.content;
+      }
+    },
+    [templates],
+  );
+
+  const onCopy = useCallback(() => {
+    console.log("onCopy", templateBody);
+    Clipboard.copy(templateBody.current);
+  }, [templateBody]);
 
   return (
     <Form
       actions={
         <ActionPanel>
-          <Action.CopyToClipboard title="Copy Template" content={templateBody} />
+          <Action.CopyToClipboard title="Copy Template" content={templateBody.current} onCopy={onCopy} />
         </ActionPanel>
       }
     >
-      <Form.Dropdown
-        id="template"
-        title="Template"
-        value={selectedTemplate}
-        onChange={(value) => {
-          const nextKey = value as TemplateKey;
-          setSelectedTemplate(nextKey);
-          const nextBody = nextKey === "learning" ? loadLearningTemplate() : PAPER_SUMMARY_TEMPLATE;
-          if (nextBody !== templateBody) {
-            setTemplateBody(nextBody);
-          }
-        }}
-      >
-        <Form.Dropdown.Item value="learning" title="Learning mode" />
-        <Form.Dropdown.Item value="paper" title="Paper summary" />
+      <Form.Dropdown id="template" title="Template" value={selectedTemplateKey} onChange={onTemplateChange}>
+        {templates.map((template) => (
+          <Form.Dropdown.Item key={template.key} value={template.key} title={template.title} />
+        ))}
       </Form.Dropdown>
-      <Form.TextArea id="body" title="Template" value={templateBody} onChange={setTemplateBody} />
+      <Form.TextArea id="body" title="Content" value={templateBody.current} onChange={() => {}} />
     </Form>
   );
 }
